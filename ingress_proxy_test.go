@@ -1,18 +1,45 @@
 package main
 
 import (
-	log "github.com/Sirupsen/logrus"
+	"testing"
+	"net/http"
+	"net/url"
+
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/util/intstr"
 )
 
-const appName = "kube-inress-proxy"
-const appVersion = "0.0.1"
+func TestSampleConfigRouting(t *testing.T) {
+	i := exampleIngress()
 
-func main() {
+	r := http.Request{}
+	r.Host = "www.test.de"
+	r.URL = &url.URL{Path: "/any/page/asd"}
+	b := i.routeRequestToBackend(&r)
+	if b.ServiceName != "service2" {
+		t.Errorf("request=%+v routed to wrong backend=%+v", r, b)
+	}
 
-	log.Infof("Starting of %s %s", appName, appVersion)
+	r = http.Request{}
+	r.Host = "www.test.co.uk"
+	r.URL = &url.URL{Path: "/any/page/asd"}
+	b = i.routeRequestToBackend(&r)
+	if b.ServiceName != "service3" {
+		t.Errorf("request=%+v routed to wrong backend=%+v", r, b)
+	}
+
+	r = http.Request{}
+	r.Host = "www.test.co.uk"
+	r.URL = &url.URL{Path: "/backend/asd"}
+	b = i.routeRequestToBackend(&r)
+	if b.ServiceName != "service4" {
+		t.Errorf("request=%+v routed to wrong backend=%+v", r, b)
+	}
+
+}
+
+func exampleIngress() *IngressProxy {
 
 	config := &extensions.Ingress{
 		ObjectMeta: api.ObjectMeta{
@@ -71,5 +98,5 @@ func main() {
 	ip := NewIngressProxy()
 	ip.Ingress = config
 
-	ip.Start()
+	return ip
 }
