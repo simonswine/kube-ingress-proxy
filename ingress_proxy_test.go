@@ -37,6 +37,14 @@ func TestSampleConfigRouting(t *testing.T) {
 		t.Errorf("request=%+v routed to wrong backend=%+v", r, b)
 	}
 
+	r = http.Request{}
+	r.Host = "www.test.at"
+	r.URL = &url.URL{Path: "/backend/asd"}
+	b = i.routeRequestToBackend(&r)
+	if b.ServiceName != "service5" {
+		t.Errorf("request=%+v routed to wrong backend=%+v", r, b)
+	}
+
 }
 
 func exampleIngress() *IngressProxy {
@@ -84,6 +92,21 @@ func exampleIngress() *IngressProxy {
 									Path: "/backend",
 									Backend: extensions.IngressBackend{
 										ServiceName: "service4",
+										ServicePort: intstr.FromInt(8080),
+									},
+								},
+							},
+						},
+					},
+				},
+				extensions.IngressRule{
+					Host: "www.test.at",
+					IngressRuleValue: extensions.IngressRuleValue{
+						HTTP: &extensions.HTTPIngressRuleValue{
+							Paths: []extensions.HTTPIngressPath{
+								extensions.HTTPIngressPath{
+									Backend: extensions.IngressBackend{
+										ServiceName: "service5",
 										ServicePort: intstr.FromInt(8080),
 									},
 								},
