@@ -3,10 +3,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -198,12 +200,55 @@ func (ip *IngressProxy) WatchConfig() {
 
 func (ip *IngressProxy) Start() {
 
+	http.HandleFunc("/", ip.handle)
+
+
 	// http server port
 	ip.daemonWaitGroup.Add(1)
 	go func() {
 		defer ip.daemonWaitGroup.Done()
-		http.HandleFunc("/", ip.handle)
 		log.Infof("Start listening for HTTP on port %d", ip.HttpPort)
+		err := http.ListenAndServe(fmt.Sprintf(":%d", ip.HttpPort), nil)
+		log.Error(err)
+	}()
+
+	// https server port
+	ip.daemonWaitGroup.Add(1)
+	go func() {
+		defer ip.daemonWaitGroup.Done()
+		// getting secrets tls
+		secretClient := ip.kubeClient.Secrets(ip.IngressNamespace)
+		secretName := ip.Ingress.Spec.TLS[0].SecretName
+		secret, err := secretClient.Get(secretName)
+		if err != nil {
+			log.Errorf("TLS secret '%s' not found: %s", secretName, err)
+			return
+		}
+
+		// hacky approach TODO: do this in memory
+		dir, err := ioutil.TempDir("", "example")
+		if err != nil {
+			log.Error(err)
+			return
+		}
+
+		defer os.RemoveAll(dir) // clean up
+
+		certPath := filepath.Join(dir, "cert.pem")
+		keyPath := filepath.Join(dir, "key.pem")
+
+		if err := ioutil.WriteFile(certPath, secret.Data[api.TLSCertKey], 0644); err != nil {
+			log.Error(err)
+			return
+		}
+		if err := ioutil.WriteFile(keyPath, secret.Data[api.TLSPrivateKeyKey], 0600); err != nil {
+			log.Error(err)
+			return
+		}
+		log.Infof("Start listening for HTTPS on port %d", ip.HttpsPort)
+		err = http.ListenAndServeTLS(fmt.Sprintf(":%d", ip.HttpsPort), certPath, keyPath, nil)
+		log.Error(err)
+
 		http.ListenAndServe(fmt.Sprintf(":%d", ip.HttpPort), nil)
 	}()
 
