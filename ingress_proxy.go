@@ -7,13 +7,15 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 
 	log "github.com/Sirupsen/logrus"
+	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	kube "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/util"
 )
 
 type IngressProxy struct {
@@ -103,7 +105,7 @@ func (ip *IngressProxy) routeRequestToBackend(r *http.Request) *extensions.Ingre
 	return ip.Ingress.Spec.Backend
 }
 
-func (ip *IngressProxy) httpError(w http.ResponseWriter, msg string, code int){
+func (ip *IngressProxy) httpError(w http.ResponseWriter, msg string, code int) {
 	http.Error(w, msg, code)
 	log.Warnf("code=%d msg=%s", code, msg)
 }
@@ -128,7 +130,7 @@ func (ip *IngressProxy) getConfig() {
 
 }
 
-func (ip *IngressProxy) readEnv() (error) {
+func (ip *IngressProxy) readEnv() error {
 
 	ip.IngressName = os.Getenv("INGRESS_NAME")
 	if len(ip.IngressName) == 0 {
@@ -162,9 +164,36 @@ func (ip *IngressProxy) Init() error {
 	if err != nil {
 		return err
 	}
-	ip.Ingress = ingress
+	ip.SetIngress(ingress)
 
 	return nil
+}
+
+func (ip *IngressProxy) SetIngress(ing *extensions.Ingress) {
+	// TODO: Use read write lock for that
+	ip.Ingress = ing
+}
+
+func (ip *IngressProxy) WatchConfig() {
+
+	rateLimiter := util.NewTokenBucketRateLimiter(0.1, 1)
+
+	for {
+		rateLimiter.Accept()
+
+		ingress, err := ip.ingClient.Get(ip.IngressName)
+		if err != nil {
+			log.Warnf("Getting config failed: %s", err)
+		}
+
+		if reflect.DeepEqual(ip.Ingress, ingress) {
+			continue
+		}
+
+		log.Infof("Upgrade ingress config")
+		ip.SetIngress(ingress)
+	}
+
 }
 
 func (ip *IngressProxy) Start() {
@@ -176,6 +205,13 @@ func (ip *IngressProxy) Start() {
 		http.HandleFunc("/", ip.handle)
 		log.Infof("Start listening for HTTP on port %d", ip.HttpPort)
 		http.ListenAndServe(fmt.Sprintf(":%d", ip.HttpPort), nil)
+	}()
+
+	// config watcher
+	ip.daemonWaitGroup.Add(1)
+	go func() {
+		defer ip.daemonWaitGroup.Done()
+		ip.WatchConfig()
 	}()
 
 	ip.daemonWaitGroup.Wait()
